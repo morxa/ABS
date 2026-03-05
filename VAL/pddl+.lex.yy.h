@@ -1112,13 +1112,7 @@ extern "C" int yywrap();
  * down here because we want the user's section 1 to have been scanned first.
  * The user has a chance to override it with an option.
  */
- //#include <unistd.h>
-
-#ifndef _UNISTD_H
-#define _UNISTD_H
-#include <io.h>
-#include <process.h>
-#endif /* _UNISTD_H */
+#include <unistd.h>
 
 #endif
 

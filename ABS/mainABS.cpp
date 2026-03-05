@@ -14,7 +14,6 @@
 #include "addition.h"
 #include "abstraction.h"
 
-#include <direct.h>
 #include <iostream>
 #include <fstream>
 #include <string>
