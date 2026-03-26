@@ -63,8 +63,7 @@ namespace abstraction {
 			}
 		}
 
-		NP::Problem* problem = new NP::Problem(("abstraction for "
-			+ pddl.symbol()->the_domain->name + "-"
+		NP::Problem* problem = new NP::Problem((pddl.symbol()->the_domain->name + "-"
 			+ pddl.symbol()->the_problem->name));
 
 		os << "===========================\nSubtypes:\n\n";
@@ -271,7 +270,9 @@ namespace abstraction {
 		}
 
 		if (all_args_bag.empty()) {
-			auto ac_ptr = new NP::Action(action_call.action_call_);
+			std::string action_name = action_call.action_call_;
+			action_name.erase(std::remove(action_name.begin(), action_name.end(), ' '), action_name.end());
+			auto ac_ptr = new NP::Action(action_name);
 			abstract_actions.emplace_back(ac_ptr);
 			// boolean
 			for (auto& pre : preconditions_)
@@ -316,13 +317,13 @@ namespace abstraction {
 				auto it_vn_index = pos_combination.begin();
 				new_action_name += "(N" + to_string(*it_vn_index++);
 				while(it_vn_index != pos_combination.end()) {
-					new_action_name += ", N" + to_string(*it_vn_index++);
+					new_action_name += ",N" + to_string(*it_vn_index++);
 				}
 				new_action_name += ")";
 
 				for (auto nb : action_call.action_args) {
 					if (bag_nidx_map.count(nb.name()) == 0) {
-						new_action_name += ", " + nb.name();
+						new_action_name += "," + nb.name();
 					}
 				}
 
