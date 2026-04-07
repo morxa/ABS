@@ -1,0 +1,5 @@
+build
+generation
+tags
+**/__pycache__/
+domains/*/addition
