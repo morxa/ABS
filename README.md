@@ -17,6 +17,47 @@ The executable is placed in `bin/ABS`.
 
 ## Quick Start
 
+### Automated Pipeline
+
+The recommended way to synthesize a policy is with the wrapper script, which runs the full pipeline and keeps intermediate inputs in a separate working directory.
+
+```shell
+python3 synthesize_policy.py <domain.pddl> <problem.pddl>
+```
+
+Example:
+
+```shell
+python3 synthesize_policy.py \
+  domains/Gripper-Sim/domain.pddl \
+  domains/Gripper-Sim/prob1-1.pddl
+```
+
+By default, this writes the generated files to `generation/<domain-name>/` and creates temporary intermediate files that are removed automatically.
+
+The generated files needed by `execute_policy.py` are:
+
+- `<problem-name>.abs`
+- `<problem-name>.policy`
+
+You can then execute the synthesized policy with:
+
+```shell
+python3 execute_policy.py \
+  domains/Gripper-Sim/domain.pddl \
+  domains/Gripper-Sim/prob1-1.pddl \
+  generation/Gripper-Sim/prob1-1.abs \
+  generation/Gripper-Sim/prob1-1.policy
+```
+
+Useful options:
+
+- `--output-dir DIR` or `-o DIR`: write final outputs to a custom directory
+- `--keep-intermediates` or `-k`: keep the copied `domain.pddl`, problem file, and generated `addition` file under `DIR/working/`
+
+### Manual Pipeline
+
+
 ### 1. Generating mutex groups
 
 ```shell
