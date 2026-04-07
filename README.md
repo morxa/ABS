@@ -35,7 +35,7 @@ python3 synthesize_policy.py \
 
 By default, this writes the generated files to `generation/<domain-name>/` and creates temporary intermediate files that are removed automatically.
 
-The generated files needed by `execute_policy.py` are:
+The synthesis step produces these main outputs:
 
 - `<problem-name>.abs`
 - `<problem-name>.policy`
@@ -46,14 +46,16 @@ You can then execute the synthesized policy with:
 python3 execute_policy.py \
   domains/Gripper-Sim/domain.pddl \
   domains/Gripper-Sim/prob1-1.pddl \
-  generation/Gripper-Sim/prob1-1.abs \
   generation/Gripper-Sim/prob1-1.policy
 ```
+
+`execute_policy.py` now generates a fresh `.abs` file for the concrete input problem before execution. This matters when reusing a policy on a different problem instance: the abstraction depends on the problem's object set, so reusing an `.abs` file from another instance can produce incorrect feature counts.
 
 Useful options:
 
 - `--output-dir DIR` or `-o DIR`: write final outputs to a custom directory
 - `--keep-intermediates` or `-k`: keep the copied `domain.pddl`, problem file, and generated `addition` file under `DIR/working/`
+- `--abs-file FILE`: tell `execute_policy.py` to reuse a pre-generated `.abs` file instead of generating one automatically
 
 ### Manual Pipeline
 

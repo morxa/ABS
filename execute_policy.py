@@ -2,25 +2,30 @@
 """
 Policy execution for ABS (Abstraction-Based Synthesis).
 
-Reads a PDDL domain/problem, an .abs feature definition file, and a .policy
-file produced by BQS, then executes the policy from the initial state until a
-goal state is reached.
+Reads a PDDL domain/problem and a .policy file produced by BQS, generates a
+matching .abs feature definition for the input problem, and then executes the
+policy from the initial state until a goal state is reached.
 
 Usage:
-    python3 execute_policy.py <domain.pddl> <problem.pddl> <file.abs> <file.policy>
+    python3 execute_policy.py <domain.pddl> <problem.pddl> <file.policy>
+    python3 execute_policy.py <domain.pddl> <problem.pddl> <file.policy> --abs-file <file.abs>
 
 Example:
     python3 execute_policy.py \\
         domains/Gripper-Sim/domain.pddl \\
         domains/Gripper-Sim/prob1-1.pddl \\
-        generation/Gripper-Sim/prob1-1.abs \\
         generation/Gripper-Sim/prob1-1.policy
 """
 
+import argparse
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from itertools import product
+from pathlib import Path
 from typing import Optional
 
 from pddl import parse_domain, parse_problem
@@ -221,6 +226,76 @@ def _parse_abs(path: str) -> tuple[dict, dict, dict]:
     return subtypes, num_feats, bool_feats
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parent
+
+
+def _run_checked(cmd: list[str], description: str, cwd: Optional[str] = None) -> None:
+    try:
+        subprocess.run(
+            cmd,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        print(f"[error] {description} failed with exit code {exc.returncode}.", file=sys.stderr)
+        if exc.stdout:
+            print(exc.stdout, file=sys.stderr, end="" if exc.stdout.endswith("\n") else "\n")
+        if exc.stderr:
+            print(exc.stderr, file=sys.stderr, end="" if exc.stderr.endswith("\n") else "\n")
+        raise SystemExit(1) from exc
+    except FileNotFoundError as exc:
+        print(f"[error] {description} failed: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+
+def _load_problem_abs(domain_file: str, problem_file: str, abs_file: Optional[str]) -> tuple[dict, dict, dict]:
+    if abs_file is not None:
+        return _parse_abs(abs_file)
+
+    repo_root = _repo_root()
+    abs_executable = repo_root / "bin" / "ABS"
+    mutex_script = repo_root / "translate" / "genMutexAddition.py"
+
+    if not abs_executable.exists():
+        print(f"[error] ABS executable not found at {abs_executable}", file=sys.stderr)
+        print("[hint] Build the project first with cmake.", file=sys.stderr)
+        raise SystemExit(1)
+    if not mutex_script.exists():
+        print(f"[error] Mutex-generation script not found at {mutex_script}", file=sys.stderr)
+        raise SystemExit(1)
+
+    problem_name = Path(problem_file).stem
+
+    with tempfile.TemporaryDirectory(prefix=f"abs_execute_{problem_name}_") as work_dir_name:
+        work_dir = Path(work_dir_name)
+        domain_copy = work_dir / "domain.pddl"
+        problem_copy = work_dir / Path(problem_file).name
+        addition_file = work_dir / "addition"
+        abs_path = work_dir / f"{problem_name}.abs"
+
+        shutil.copy2(domain_file, domain_copy)
+        shutil.copy2(problem_file, problem_copy)
+
+        _run_checked(
+            [sys.executable, str(mutex_script), str(domain_copy), str(problem_copy), str(addition_file)],
+            "mutex-group generation",
+        )
+        _run_checked(
+            [str(abs_executable), str(work_dir), problem_name, str(work_dir)],
+            "ABS abstraction generation",
+            cwd=str(repo_root),
+        )
+
+        if not abs_path.exists():
+            print(f"[error] ABS did not generate {abs_path}", file=sys.stderr)
+            raise SystemExit(1)
+
+        return _parse_abs(str(abs_path))
+
+
 # ---------------------------------------------------------------------------
 # Policy-file parsing
 # ---------------------------------------------------------------------------
@@ -350,26 +425,29 @@ def _subtype_objects(subtypes: dict, base_type: str) -> list[str]:
     return []
 
 
+def _ground_numeric_feature_atom(feat: NumericFeature, binding: dict[str, str]) -> tuple:
+    args = []
+    for arg_kind, arg_value in feat.pred_args:
+        if arg_kind == "var":
+            args.append(binding[arg_value])
+        else:
+            args.append(arg_value)
+    return (feat.pred_name,) + tuple(args)
+
+
 def _eval_numeric(feat: NumericFeature, state: frozenset, subtypes: dict) -> int:
     """Count ground atoms that match the feature's predicate pattern."""
-    # Build candidate lists for each variable position
-    var_candidates: dict[str, list[str]] = {}
-    for bt in feat.base_types:
-        var_candidates[bt] = _subtype_objects(subtypes, bt)
-
-    # Variable positions in pred_args tell us which arg positions loop over objects
-    # Build the variable order from pred_args
+    var_candidates = {base_type: _subtype_objects(subtypes, base_type) for base_type in feat.base_types}
     var_order = [arg[1] for arg in feat.pred_args if arg[0] == "var"]
-
-    # Enumerate all combinations
     candidate_lists = [var_candidates.get(bt, []) for bt in var_order]
+
+    if any(not candidates for candidates in candidate_lists):
+        return 0
+
     count = 0
     for combo in product(*candidate_lists):
         binding = dict(zip(var_order, combo))
-        args = []
-        for kind, val in feat.pred_args:
-            args.append(binding[val] if kind == "var" else val)
-        atom = (feat.pred_name,) + tuple(args)
+        atom = _ground_numeric_feature_atom(feat, binding)
         if atom in state:
             count += 1
     return count
@@ -427,12 +505,12 @@ def _find_witness(feat: NumericFeature, state: frozenset, subtypes: dict) -> Opt
     var_order = [arg[1] for arg in feat.pred_args if arg[0] == "var"]
     candidate_lists = [_subtype_objects(subtypes, bt) for bt in var_order]
 
+    if any(not candidates for candidates in candidate_lists):
+        return None
+
     for combo in product(*candidate_lists):
         binding = dict(zip(var_order, combo))
-        args = []
-        for kind, val in feat.pred_args:
-            args.append(binding[val] if kind == "var" else val)
-        if (feat.pred_name,) + tuple(args) in state:
+        if _ground_numeric_feature_atom(feat, binding) in state:
             return binding
     return None
 
@@ -567,7 +645,8 @@ def _is_goal(state: frozenset, goal_atoms: frozenset) -> bool:
 # Main execution loop
 # ---------------------------------------------------------------------------
 
-def execute_policy(domain_file: str, problem_file: str, abs_file: str, policy_file: str,
+def execute_policy(domain_file: str, problem_file: str, policy_file: str,
+                   abs_file: Optional[str] = None,
                    verbose: bool = True):
     # --- Parse PDDL ---
     domain = parse_domain(domain_file)
@@ -577,8 +656,8 @@ def execute_policy(domain_file: str, problem_file: str, abs_file: str, policy_fi
     goal_atoms = _goal_atoms(problem)
     domain_actions = {action.name: action for action in domain.actions}
 
-    # --- Parse .abs file ---
-    subtypes, num_feats, bool_feats = _parse_abs(abs_file)
+    # --- Load .abs file for the target problem ---
+    subtypes, num_feats, bool_feats = _load_problem_abs(domain_file, problem_file, abs_file)
 
     # --- Parse .policy file ---
     rules = _parse_policy(policy_file)
@@ -658,12 +737,27 @@ def _print_state_summary(step: int, state: frozenset, feat_vals: dict):
 # ---------------------------------------------------------------------------
 
 def main():
-    if len(sys.argv) != 5:
-        print(__doc__)
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        description="Execute a BQS policy on a concrete PDDL problem.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python3 execute_policy.py domains/gripper_1/domain.pddl domains/gripper_1/p00003.pddl generation/gripper_1/p00002.policy
+  python3 execute_policy.py domains/gripper_1/domain.pddl domains/gripper_1/p00003.pddl generation/gripper_1/p00002.policy --abs-file generation/gripper_1/p00003.abs
+        """,
+    )
+    parser.add_argument("domain", help="Path to domain.pddl")
+    parser.add_argument("problem", help="Path to problem.pddl")
+    parser.add_argument("policy", help="Path to the .policy file")
+    parser.add_argument(
+        "--abs-file",
+        dest="abs_file",
+        default=None,
+        help="Use a pre-generated .abs file instead of generating one for the input problem.",
+    )
 
-    domain_file, problem_file, abs_file, policy_file = sys.argv[1:]
-    success = execute_policy(domain_file, problem_file, abs_file, policy_file)
+    args = parser.parse_args()
+    success = execute_policy(args.domain, args.problem, args.policy, abs_file=args.abs_file)
     sys.exit(0 if success else 1)
 
 
