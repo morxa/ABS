@@ -19,12 +19,13 @@ Example:
 
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from itertools import product
 from typing import Optional
 
-from pyperplan.pddl.parser import Parser as PddlParser
-
+from pddl import parse_domain, parse_problem
+from pddl.logic.base import And, Not
+from pddl.logic.predicates import Predicate
 
 # ---------------------------------------------------------------------------
 # State representation
@@ -34,16 +35,41 @@ from pyperplan.pddl.parser import Parser as PddlParser
 # A state is a frozenset of ground atoms.
 
 def _atom_to_tuple(atom) -> tuple:
-    """Convert a pyperplan Predicate (ground) to a plain tuple."""
-    return (atom.name,) + tuple(name for name, _type in atom.signature)
+    """Convert a ground pddl Predicate to a plain tuple."""
+    return (atom.name,) + tuple(term.name for term in atom.terms)
+
+
+def _iter_conjuncts(formula) -> tuple:
+    if isinstance(formula, And):
+        return tuple(formula.operands)
+    return (formula,)
+
+
+def _ground_formula_atom(atom: Predicate, binding: dict[str, str]) -> tuple:
+    grounded_args = []
+    for term in atom.terms:
+        grounded_args.append(binding.get(term.name, term.name))
+    return (atom.name,) + tuple(grounded_args)
+
+
+def _type_name(type_tags: frozenset[str]) -> Optional[str]:
+    return next(iter(type_tags), None)
+
+
+def _goal_predicates(goal) -> frozenset[Predicate]:
+    predicates = []
+    for clause in _iter_conjuncts(goal):
+        if isinstance(clause, Predicate):
+            predicates.append(clause)
+    return frozenset(predicates)
 
 
 def _make_initial_state(prob) -> frozenset:
-    return frozenset(_atom_to_tuple(a) for a in prob.initial_state)
+    return frozenset(_atom_to_tuple(a) for a in prob.init)
 
 
 def _goal_atoms(prob) -> frozenset:
-    return frozenset(_atom_to_tuple(a) for a in prob.goal)
+    return frozenset(_atom_to_tuple(a) for a in _goal_predicates(prob.goal))
 
 
 # ---------------------------------------------------------------------------
@@ -424,14 +450,17 @@ def _ground_action(
     Feature witnesses are matched to PDDL action parameters by type.
     Returns (action_name, [arg_name, ...]) or None on failure.
     """
+    if rule.action_name is None:
+        return None
+
     action_schema = domain_actions[rule.action_name]
-    # signature: [('?b', (ball,)), ('?r', (room,)), ('?g', (gripper,))]
-    params = action_schema.signature  # list of ('?name', type_or_tuple)
+    params = action_schema.parameters
+    action_args = rule.action_args or []
 
     # Collect object bindings from feature witnesses: type_name → object_name
     type_to_obj: dict[str, str] = {}
 
-    for arg_spec in rule.action_args:
+    for arg_spec in action_args:
         if arg_spec[0] != "features":
             continue
         feat_indices = arg_spec[1]
@@ -448,7 +477,7 @@ def _ground_action(
     # Constants in the template appear as ("const", name) entries
     # We match them to action params by type using the objects dict (available via domain)
     # For now, store constants by their name; we'll match by type below.
-    const_names = [arg[1] for arg in rule.action_args if arg[0] == "const"]
+    const_names = [arg[1] for arg in action_args if arg[0] == "const"]
 
     # Build object-name → type-name map from params where the object is already known
     # We need the problem objects for type lookup — use the domain action's signature
@@ -459,8 +488,8 @@ def _ground_action(
     result_args: list[Optional[str]] = [None] * len(params)
 
     # Pass 1: assign feature witnesses by type
-    for i, (pname, ptype) in enumerate(params):
-        type_name = ptype[0].name if isinstance(ptype, tuple) else ptype.name
+    for i, param in enumerate(params):
+        type_name = _type_name(param.type_tags)
         if type_name in type_to_obj:
             result_args[i] = type_to_obj[type_name]
 
@@ -478,7 +507,8 @@ def _ground_action(
         print(f"  [error] Could not fully ground action {rule.action_name}", file=sys.stderr)
         return None
 
-    return rule.action_name, result_args
+    grounded_args = [arg for arg in result_args if arg is not None]
+    return rule.action_name, grounded_args
 
 
 # ---------------------------------------------------------------------------
@@ -493,20 +523,14 @@ def _apply_action(
 ) -> frozenset:
     """Apply a grounded action to a state, returning the successor state."""
     schema = domain_actions[action_name]
-    # Build parameter binding: '?b' → 'ball1', etc.
-    binding = {pname: args[i] for i, (pname, _) in enumerate(schema.signature)}
-
-    def ground(atom) -> tuple:
-        grounded_args = []
-        for pname, _ptype in atom.signature:
-            grounded_args.append(binding.get(pname, pname))
-        return (atom.name,) + tuple(grounded_args)
+    binding = {param.name: args[i] for i, param in enumerate(schema.parameters)}
 
     new_state = set(state)
-    for atom in schema.effect.addlist:
-        new_state.add(ground(atom))
-    for atom in schema.effect.dellist:
-        new_state.discard(ground(atom))
+    for clause in _iter_conjuncts(schema.effect):
+        if isinstance(clause, Predicate):
+            new_state.add(_ground_formula_atom(clause, binding))
+        elif isinstance(clause, Not) and isinstance(clause.argument, Predicate):
+            new_state.discard(_ground_formula_atom(clause.argument, binding))
     return frozenset(new_state)
 
 
@@ -517,13 +541,16 @@ def _check_preconditions(
     domain_actions: dict,
 ) -> bool:
     schema = domain_actions[action_name]
-    binding = {pname: args[i] for i, (pname, _) in enumerate(schema.signature)}
+    binding = {param.name: args[i] for i, param in enumerate(schema.parameters)}
 
-    for atom in schema.precondition:
-        grounded = (atom.name,) + tuple(
-            binding.get(pname, pname) for pname, _ in atom.signature
-        )
-        if grounded not in state:
+    for clause in _iter_conjuncts(schema.precondition):
+        if isinstance(clause, Predicate):
+            if _ground_formula_atom(clause, binding) not in state:
+                return False
+        elif isinstance(clause, Not) and isinstance(clause.argument, Predicate):
+            if _ground_formula_atom(clause.argument, binding) in state:
+                return False
+        else:
             return False
     return True
 
@@ -543,13 +570,12 @@ def _is_goal(state: frozenset, goal_atoms: frozenset) -> bool:
 def execute_policy(domain_file: str, problem_file: str, abs_file: str, policy_file: str,
                    verbose: bool = True):
     # --- Parse PDDL ---
-    parser = PddlParser(domain_file, problem_file)
-    domain = parser.parse_domain()
-    problem = parser.parse_problem(domain)
+    domain = parse_domain(domain_file)
+    problem = parse_problem(problem_file)
 
     state = _make_initial_state(problem)
     goal_atoms = _goal_atoms(problem)
-    domain_actions = domain.actions  # dict name → Action schema
+    domain_actions = {action.name: action for action in domain.actions}
 
     # --- Parse .abs file ---
     subtypes, num_feats, bool_feats = _parse_abs(abs_file)
