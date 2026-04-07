@@ -112,7 +112,7 @@ version = "26.0"
 description = "Core utilities for Python packages"
 optional = false
 python-versions = ">=3.8"
-groups = ["dev"]
+groups = ["main", "dev"]
 files = [
     {file = "packaging-26.0-py3-none-any.whl", hash = "sha256:b36f1fef9334a5588b4166f8bcd26a14e521f2b55e6b9de3aaa80d3ff7a37529"},
     {file = "packaging-26.0.tar.gz", hash = "sha256:00243ae351a257117b6a241061796684b084ed1c516a08c48a3f7e147a9d80b4"},
@@ -147,6 +147,21 @@ files = [
     {file = "platformdirs-4.9.4-py3-none-any.whl", hash = "sha256:68a9a4619a666ea6439f2ff250c12a853cd1cbd5158d258bd824a7df6be2f868"},
     {file = "platformdirs-4.9.4.tar.gz", hash = "sha256:1ec356301b7dc906d83f371c8f487070e99d3ccf9e501686456394622a01a934"},
 ]
+
+[[package]]
+name = "pyperplan"
+version = "2.1"
+description = "A lightweight STRIPS planner written in Python."
+optional = false
+python-versions = ">=3.6"
+groups = ["main"]
+files = [
+    {file = "pyperplan-2.1-py2.py3-none-any.whl", hash = "sha256:72e51921e8a17b9c583f96f47e78d78019b8177d7f05e31cddb86928dfd67b99"},
+    {file = "pyperplan-2.1.tar.gz", hash = "sha256:3754d7008d279392a8f0f8aea6da3cd0bdc03613297ddb06e33e0a983c2fbf9e"},
+]
+
+[package.dependencies]
+wheel = "*"
 
 [[package]]
 name = "pytokens"
@@ -203,7 +218,25 @@ files = [
 [package.extras]
 dev = ["black", "build", "mypy", "pytest", "pytest-cov", "setuptools", "tox", "twine", "wheel"]
 
+[[package]]
+name = "wheel"
+version = "0.46.3"
+description = "Command line tool for manipulating wheel files"
+optional = false
+python-versions = ">=3.9"
+groups = ["main"]
+files = [
+    {file = "wheel-0.46.3-py3-none-any.whl", hash = "sha256:4b399d56c9d9338230118d705d9737a2a468ccca63d5e813e2a4fc7815d8bc4d"},
+    {file = "wheel-0.46.3.tar.gz", hash = "sha256:e3e79874b07d776c40bd6033f8ddf76a7dad46a7b8aa1b2787a83083519a1803"},
+]
+
+[package.dependencies]
+packaging = ">=24.0"
+
+[package.extras]
+test = ["pytest (>=6.0.0)", "setuptools (>=77)"]
+
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12"
-content-hash = "41f36fde12a173032105c65a3db4762b386c9bfe06e08b8be9cda4e40b20ccba"
+content-hash = "deb2e834e3d0c2faefb6ad81ddfc62a8ec5a37236ad3f7350efcda27811f6485"
